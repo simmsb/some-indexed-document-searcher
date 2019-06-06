@@ -1,0 +1,19 @@
+[package]
+name = "some-indexed-document-searcher"
+version = "0.1.0"
+authors = ["Ben Simms <ben@bensimms.moe>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+walkdir = "2.2.7"
+tantivy = "0.9.1"
+directories = "2.0.1"
+snafu = "0.4.1"
+config = "0.9.3"
+serde = "1.0.92"
+toml = "0.5.1"
+serde_derive = "1.0.92"
+glob = "0.3.0"
+
