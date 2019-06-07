@@ -38,7 +38,7 @@ impl DocIndexer {
         let full_path = schema_builder.add_text_field("full_path", STORED);
         let filename = schema_builder.add_text_field("filename", STRING | STORED);
         let content = schema_builder.add_text_field("content", TEXT | STORED);
-        let modified = schema_builder.add_date_field("last_modified", INDEXED | STORED);
+        let modified = schema_builder.add_u64_field("last_modified", FAST | INDEXED | STORED);
 
         let schema = schema_builder.build();
 
@@ -57,7 +57,8 @@ impl DocIndexer {
         let dir = tantivy::directory::MmapDirectory::open(&config.index_location)
             .context(IndexDirError)?;
 
-        let index = tantivy::Index::open_or_create(dir, self.schema.clone()).context(IndexTantivyError)?;
+        let index =
+            tantivy::Index::open_or_create(dir, self.schema.clone()).context(IndexTantivyError)?;
 
         self.indexer = Some(index);
 

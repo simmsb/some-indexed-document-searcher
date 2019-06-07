@@ -44,7 +44,7 @@ pub fn load_config() -> Result<Config> {
     config
         .set_default("index_location", project_dirs.data_dir().to_str())
         .with_context(|| DataDir {
-            dir: project_dirs.config_dir().clone(),
+            dir: project_dirs.config_dir(),
         })?;
 
     let user_dirs = UserDirs::new().expect("Where's your home dir?");
@@ -68,13 +68,13 @@ pub fn load_config() -> Result<Config> {
         fs::create_dir_all(config_dir.parent().unwrap()).unwrap();
         let mut file = fs::File::create(&config_dir).unwrap();
 
-        file.write(stringified.as_bytes()).unwrap();
+        file.write_all(stringified.as_bytes()).unwrap();
     }
 
     config
         .merge(config::File::from(config_dir))
         .with_context(|| ConfigFile {
-            filename: project_dirs.config_dir().clone(),
+            filename: project_dirs.config_dir(),
         })?;
 
     config.try_into().context(GeneralConfigError)

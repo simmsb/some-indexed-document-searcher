@@ -32,13 +32,10 @@ fn main_inner() -> Result<(), SIDSError> {
 }
 
 fn main() {
-    match main_inner() {
-        Err(e) => {
-            eprintln!("Oops: {}", e);
-            if let Some(bt) = ErrorCompat::backtrace(&e) {
-                eprintln!("{}", bt);
-            }
+    if let Err(e) = main_inner() {
+        eprintln!("Oops: {}", e);
+        if let Some(bt) = ErrorCompat::backtrace(&e) {
+            eprintln!("{}", bt);
         }
-        _ => (),
     }
 }

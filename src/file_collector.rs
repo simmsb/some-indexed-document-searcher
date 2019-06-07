@@ -88,7 +88,7 @@ impl Iterator for FilesCollectorIteror {
             if !dent
                 .path()
                 .extension()
-                .and_then(|e| e.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .map(|e| self.exts.contains(e))
                 .unwrap_or(false)
             {
