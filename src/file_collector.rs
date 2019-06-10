@@ -48,8 +48,37 @@ impl FilesCollectorIteror {
     }
 }
 
+#[derive(Debug)]
+pub struct FileEntry {
+    pub full_path: PathBuf,
+}
+
+impl FileEntry {
+    pub fn full_path(&self) -> &str {
+        self.full_path
+            .to_str()
+            .expect("Couldn't convert OsStr to str")
+    }
+
+    pub fn file_name(&self) -> &str {
+        self.full_path
+            .file_name()
+            .expect("Couldn't get file name")
+            .to_str()
+            .expect("Couldn't convert OsStr to str")
+    }
+
+    pub fn file_ext(&self) -> &str {
+        self.full_path
+            .extension()
+            .expect("Couldn't get file ext")
+            .to_str()
+            .expect("Couldn't convert OsStr to str")
+    }
+}
+
 impl Iterator for FilesCollectorIteror {
-    type Item = Result<DirEntry>;
+    type Item = Result<FileEntry>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -95,7 +124,7 @@ impl Iterator for FilesCollectorIteror {
                 continue;
             }
 
-            return Some(Ok(dent));
+            return Some(Ok(FileEntry{ full_path: dent.into_path() }));
         }
     }
 }
