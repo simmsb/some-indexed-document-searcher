@@ -12,9 +12,10 @@ use tantivy::{self, doc, schema::*};
 
 use super::config;
 use super::file_collector::FileEntry;
+use super::once_every;
 
 #[derive(Debug, Snafu)]
-pub enum IndexerError {
+pub enum Error {
     #[snafu(display("Could not open index directory: {}", source))]
     IndexDirError {
         source: tantivy::directory::error::OpenDirectoryError,
@@ -26,14 +27,13 @@ pub enum IndexerError {
     },
 }
 
-type Result<T, E = IndexerError> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct DocSchema {
     pub full_path: Field,
     pub filename: Field,
     pub content: Field,
-    pub modified: Field,
     pub schema: Schema,
 }
 
@@ -50,7 +50,6 @@ impl DocIndexer {
         let full_path = schema_builder.add_text_field("full_path", STORED);
         let filename = schema_builder.add_text_field("filename", STRING | STORED);
         let content = schema_builder.add_text_field("content", TEXT | STORED);
-        let modified = schema_builder.add_u64_field("last_modified", FAST | INDEXED | STORED);
 
         let schema = schema_builder.build();
 
@@ -61,7 +60,6 @@ impl DocIndexer {
                 full_path,
                 filename,
                 content,
-                modified,
                 schema,
             },
             indexer,
@@ -70,9 +68,9 @@ impl DocIndexer {
     }
 
     fn create_indexer(schema: &Schema, config: &config::Config) -> Result<tantivy::Index> {
-        std::fs::create_dir_all(&config.index_location).unwrap();
-        let dir = tantivy::directory::MmapDirectory::open(&config.index_location)
-            .context(IndexDirError)?;
+        let index_folder = config.index_location.join("index");
+        std::fs::create_dir_all(&index_folder).unwrap();
+        let dir = tantivy::directory::MmapDirectory::open(&index_folder).context(IndexDirError)?;
 
         let index =
             tantivy::Index::open_or_create(dir, schema.clone()).context(IndexTantivyError)?;
@@ -101,52 +99,72 @@ impl DocIndexer {
 }
 
 #[derive(Debug)]
-pub struct IndexRequest(pub FileEntry);
+pub enum IndexAction {
+    /// File exists in the db already
+    ReIndex,
+    /// File does not exist yet
+    Index,
+}
+
+#[derive(Debug)]
+pub struct IndexRequest(pub FileEntry, pub IndexAction);
+
+//  the system looks a bit like this
+//
+//
+//                      / reader thread 0 \
+//  file paths to index - ............... - tantivy indexer
+//                      \ reader thread n /
+//
+//
+//
 
 struct IndexerWorker {
     i_recv: Receiver<IndexRequest>,
-    d_send: Sender<Document>,
+    d_send: Sender<(Option<Term>, Document)>,
     schema: DocSchema,
 }
 
 impl IndexerWorker {
     fn go(self) {
-        for IndexRequest(doc) in &self.i_recv {
-            if let Some((modified, content)) = match doc.file_ext() {
-                "txt" | "org" | "md" => self.index_text_doc(&doc),
-                ext => {
-                    eprintln!("Unknown ext: {}", ext);
+        for IndexRequest(doc, action) in &self.i_recv {
+            if let Some(content) = match doc.file_ext() {
+                "txt" | "org" | "md" | "rst" => self.index_text_doc(&doc),
+                _ext => {
+                    // eprintln!("Unknown ext: {}", ext);
                     continue;
                 }
             } {
-                let _ = self.d_send.send(doc!(
+                let revoke_doc = match action {
+                    IndexAction::ReIndex => Some(Term::from_field_text(
+                        self.schema.full_path,
+                        doc.full_path(),
+                    )),
+                    IndexAction::Index => None,
+                };
+
+                let doc = doc!(
                     self.schema.full_path => doc.full_path(),
                     self.schema.filename => doc.file_name(),
-                    self.schema.modified => modified,
                     self.schema.content => content,
-                ));
+                );
+
+                let _ = self.d_send.send((revoke_doc, doc));
             }
         }
     }
 
-    fn index_text_doc(&self, doc: &FileEntry) -> Option<(u64, String)> {
+    fn index_text_doc(&self, doc: &FileEntry) -> Option<String> {
         // TODO: eventually keep track of errors
         let f = fs::File::open(&doc.full_path).ok()?;
 
-        let modified: u64 = f
-            .metadata()
-            .ok()?
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_secs();
+        // TODO: don't read the file if it's over some size
 
         let mut buf_reader = BufReader::new(f);
         let mut content = String::new();
         buf_reader.read_to_string(&mut content).ok()?;
 
-        Some((modified, content))
+        Some(content)
     }
 }
 
@@ -165,11 +183,9 @@ impl IndexerThreads {
         let (doc_send, doc_recv) = crossbeam_channel::bounded(num_cpus);
 
         let doc_processor_threads = (0..num_cpus)
-            .into_iter()
             .map(|_| {
                 let i_recv = index_recv.clone();
                 let d_send = doc_send.clone();
-                // 400 mb per thread seems alright :^)
                 let t_schema = schema.clone();
 
                 Ok(std::thread::spawn(move || {
@@ -184,7 +200,7 @@ impl IndexerThreads {
             })
             .collect::<Result<_>>()?;
 
-        let doc_writer = indexer.writer(5_000_000).context(IndexTantivyError)?;
+        let doc_writer = indexer.writer(500_000_000).context(IndexTantivyError)?;
 
         let doc_consumer_thread = std::thread::spawn(move || {
             Self::do_doc_writes(doc_writer, doc_recv);
@@ -197,9 +213,19 @@ impl IndexerThreads {
         })
     }
 
-    fn do_doc_writes(mut writer: tantivy::IndexWriter, d_recv: Receiver<Document>) {
-        for doc in &d_recv {
+    fn do_doc_writes(mut writer: tantivy::IndexWriter, d_recv: Receiver<(Option<Term>, Document)>) {
+        for ((revoke_doc, doc), should_commit) in
+            d_recv.iter().zip(once_every::OnceEvery::new(1000))
+        {
+            if let Some(revoke_doc) = revoke_doc {
+                writer.delete_term(revoke_doc);
+            }
+
             writer.add_document(doc);
+
+            if should_commit {
+                let _ = writer.commit();
+            }
         }
 
         let _ = writer.commit();

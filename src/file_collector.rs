@@ -6,7 +6,7 @@ use walkdir::{DirEntry, WalkDir};
 use super::config;
 
 #[derive(Debug, Snafu)]
-pub enum FileCollectorError {
+pub enum Error {
     #[snafu(display("Could not read glob pattern '{}': {}", glob, source))]
     GlobParseError {
         glob: String,
@@ -18,7 +18,7 @@ pub enum FileCollectorError {
     WalkDirError { source: walkdir::Error },
 }
 
-type Result<T, E = FileCollectorError> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct FilesCollectorIteror {
     ignored: Vec<glob::Pattern>,
@@ -40,11 +40,6 @@ impl FilesCollectorIteror {
             .to_str()
             .map(|s| !self.ignored.iter().any(|p| p.matches(s)))
             .unwrap_or(false)
-
-        // if !p {
-        //     println!("Ignoring entry: {:?}", entry);
-        // }
-        // p
     }
 }
 

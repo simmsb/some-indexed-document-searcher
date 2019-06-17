@@ -8,7 +8,7 @@ use std::{fs, io::Write, path::PathBuf};
 use toml;
 
 #[derive(Debug, Snafu)]
-pub enum ConfigError {
+pub enum Error {
     #[snafu(display("Could not locate config directory"))]
     NoConfigDir,
     #[snafu(display("Could not open config from {}: {}", filename.display(), source))]
@@ -25,7 +25,7 @@ pub enum ConfigError {
     GeneralConfigError { source: config::ConfigError },
 }
 
-type Result<T, E = ConfigError> = std::result::Result<T, E>;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Config {
@@ -50,7 +50,7 @@ pub fn load_config() -> Result<Config> {
     let user_dirs = UserDirs::new().expect("Where's your home dir?");
 
     config
-        .set_default("indexed_exts", vec!["txt", "org", "pdf", "md", "rst"])
+        .set_default("indexed_exts",  vec!["txt", "org", "pdf", "md", "rst"])
         .context(GeneralConfigError)?;
     config
         .set_default("root_globs", vec![user_dirs.home_dir().to_str()])
