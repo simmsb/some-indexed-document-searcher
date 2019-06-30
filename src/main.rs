@@ -1,7 +1,7 @@
 use ctrlc;
 use snafu::{ErrorCompat, ResultExt, Snafu};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 
@@ -56,6 +56,47 @@ fn process_file(
     Some(())
 }
 
+struct IndexerData {
+    file_collector: file_collector::FilesCollectorIteror,
+    doc_indexer: indexer::DocIndexer,
+    modified_cache: last_modified_cache::LastModifiedCache,
+    indexed_files: Arc<AtomicUsize>,
+    failed_files: Arc<AtomicUsize>,
+    running: Arc<AtomicBool>,
+}
+
+fn deploy_indexer(mut data: IndexerData) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for file in data.file_collector {
+            if let Ok(file) = file {
+                if let Some(_) = process_file(&data.modified_cache, &mut data.doc_indexer, file) {
+                    data.indexed_files.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    data.failed_files.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            if !data.running.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+
+        data.doc_indexer.close();
+    })
+}
+
+fn deploy_cc_handler() -> Arc<AtomicBool> {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::Relaxed);
+    })
+    .expect("Error setting C-c handler");
+
+    running
+}
+
 fn main_inner() -> Result<(), SIDSError> {
     let config = config::load_config().context(ConfigLoad)?;
 
@@ -67,47 +108,21 @@ fn main_inner() -> Result<(), SIDSError> {
     let mut doc_indexer = indexer::DocIndexer::new(&config).context(IndexerError)?;
     doc_indexer.spawn_workers().context(IndexerError)?;
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
+    let indexer = doc_indexer.indexer().clone();
+    let schema = doc_indexer.schema().clone();
 
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::Relaxed);
-    }).expect("Error setting C-c handler");
+    let indexer_data = IndexerData {
+        file_collector: file_collector::collect_files(&config).context(CollectorError)?,
+        doc_indexer,
+        modified_cache,
+        indexed_files: Arc::new(AtomicUsize::new(0)),
+        failed_files: Arc::new(AtomicUsize::new(0)),
+        running: deploy_cc_handler(),
+    };
 
-    for file in file_collector::collect_files(&config).context(CollectorError)? {
-        if let Ok(file) = file {
-            let _ = process_file(&modified_cache, &mut doc_indexer, file);
-        }
+    let indexer_thread = deploy_indexer(indexer_data);
 
-        if !running.load(Ordering::Relaxed) {
-            break;
-        }
-    }
-
-    doc_indexer.close();
-
-    let reader = doc_indexer.indexer.reader().unwrap();
-    let searcher = reader.searcher();
-    let qp = tantivy::query::QueryParser::for_index(
-        &doc_indexer.indexer,
-        vec![doc_indexer.schema.content],
-    );
-
-    let query = qp.parse_query("fuck").unwrap();
-
-    let top_docs: Vec<(tantivy::Score, tantivy::DocAddress)> = searcher
-        .search(&query, &tantivy::collector::TopDocs::with_limit(10))
-        .unwrap();
-
-    for (score, addr) in top_docs {
-        let retr_doc = searcher.doc(addr).unwrap();
-
-        println!(
-            "{}: {}",
-            score,
-            doc_indexer.schema.schema.to_json(&retr_doc)
-        );
-    }
+    let _ = indexer_thread.join();
 
     Ok(())
 }

@@ -31,16 +31,34 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct DocSchema {
-    pub full_path: Field,
-    pub filename: Field,
-    pub content: Field,
-    pub schema: Schema,
+    full_path: Field,
+    filename: Field,
+    content: Field,
+    schema: Schema,
+}
+
+impl DocSchema {
+    pub fn full_path(&self) -> Field {
+        self.full_path
+    }
+
+    pub fn filename(&self) -> Field {
+        self.filename
+    }
+
+    pub fn content(&self) -> Field {
+        self.content
+    }
+
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
 }
 
 pub struct DocIndexer {
-    pub schema: DocSchema,
-    pub indexer: tantivy::Index,
-    pub indexer_threads: Option<IndexerThreads>,
+    schema: DocSchema,
+    indexer: tantivy::Index,
+    indexer_threads: Option<IndexerThreads>,
 }
 
 impl DocIndexer {
@@ -65,6 +83,14 @@ impl DocIndexer {
             indexer,
             indexer_threads: None,
         })
+    }
+
+    pub fn schema(&self) -> &DocSchema {
+        &self.schema
+    }
+
+    pub fn indexer(&self) -> &tantivy::Index {
+        &self.indexer
     }
 
     fn create_indexer(schema: &Schema, config: &config::Config) -> Result<tantivy::Index> {
