@@ -10,6 +10,7 @@ mod file_collector;
 mod indexer;
 mod last_modified_cache;
 mod once_every;
+mod gui;
 
 #[derive(Debug, Snafu)]
 enum SIDSError {
@@ -123,6 +124,8 @@ fn main_inner() -> Result<(), SIDSError> {
     let indexer_thread = deploy_indexer(indexer_data);
 
     let _ = indexer_thread.join();
+
+    gui::spawn();
 
     Ok(())
 }
