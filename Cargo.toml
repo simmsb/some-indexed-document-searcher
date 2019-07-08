@@ -25,3 +25,4 @@ sled = { version = "0.24.1", features = ["compression"] }
 gtk = "0.7.0"
 relm = "0.17.0"
 relm-derive = "0.17.0"
+relm-attributes = "0.16.0"
