@@ -8,6 +8,7 @@ use std::sync::{
 mod config;
 mod file_collector;
 mod indexer;
+mod searcher;
 mod last_modified_cache;
 mod once_every;
 mod gui;
@@ -112,6 +113,8 @@ fn main_inner() -> Result<(), SIDSError> {
     let indexer = doc_indexer.indexer().clone();
     let schema = doc_indexer.schema().clone();
 
+    let searcher = searcher::Searcher::new(schema, indexer).unwrap();
+
     let indexer_data = IndexerData {
         file_collector: file_collector::collect_files(&config).context(CollectorError)?,
         doc_indexer,
@@ -125,7 +128,7 @@ fn main_inner() -> Result<(), SIDSError> {
 
     let _ = indexer_thread.join();
 
-    gui::spawn();
+    gui::spawn(searcher);
 
     Ok(())
 }

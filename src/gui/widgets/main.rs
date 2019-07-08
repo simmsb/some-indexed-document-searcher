@@ -1,7 +1,9 @@
 use gtk::prelude::*;
-use relm::{connect, Widget, ContainerWidget};
+use relm::{connect, connect_stream, Widget, ContainerWidget};
 use relm_attributes::widget;
 use relm_derive::Msg;
+
+use crate::searcher::Searcher;
 
 #[derive(Msg)]
 pub enum Msg {
@@ -10,6 +12,7 @@ pub enum Msg {
 }
 
 pub struct Model {
+    searcher: Searcher,
     results: Vec<relm::Component<super::SearchResult>>,
 }
 
@@ -37,8 +40,9 @@ impl Main {
 
 #[widget]
 impl Widget for Main {
-    fn model() -> Model {
+    fn model(searcher: Searcher) -> Model {
         Model {
+            searcher,
             results: Vec::new(),
         }
     }
@@ -46,7 +50,11 @@ impl Widget for Main {
     fn update(&mut self, event: Msg) {
         match event {
             Msg::Quit => gtk::main_quit(),
-            Msg::Search(s) => println!("Searching for: {}", s),
+            Msg::Search(s) => {
+                if let Some(results) = self.model.searcher.search(&s) {
+                    self.update_results(&results);
+                }
+            },
         }
     }
 
@@ -59,13 +67,15 @@ impl Widget for Main {
                     placeholder_text: Some("Search"),
                 },
                 #[name="results_list"]
-                gtk::ListBox {
+                gtk::Box {
+                    orientation: gtk::Orientation::Vertical,
                     child: {
                         fill: true,
                         expand: true,
                     },
                 },
             },
+            delete_event(_, _) => (Msg::Quit, Inhibit(false)),
         },
     }
 }
