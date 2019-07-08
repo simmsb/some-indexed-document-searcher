@@ -1,9 +1,9 @@
 use gtk::prelude::*;
-use relm::{connect, connect_stream, Widget, ContainerWidget};
+use relm::{connect, connect_stream, ContainerWidget, Widget};
 use relm_attributes::widget;
 use relm_derive::Msg;
 
-use crate::searcher::Searcher;
+use crate::searcher::{SearchResult, Searcher};
 
 #[derive(Msg)]
 pub enum Msg {
@@ -17,13 +17,13 @@ pub struct Model {
 }
 
 impl Main {
-    fn update_results(&mut self, results: &[String]) {
+    fn update_results(&mut self, results: Vec<SearchResult>) {
         self.clear();
 
         for result in results {
             let child = self
                 .results_list
-                .add_widget::<super::SearchResult>(result.clone());
+                .add_widget::<super::SearchResult>((result.path, result.snippet));
 
             self.model.results.push(child);
         }
@@ -52,9 +52,9 @@ impl Widget for Main {
             Msg::Quit => gtk::main_quit(),
             Msg::Search(s) => {
                 if let Some(results) = self.model.searcher.search(&s) {
-                    self.update_results(&results);
+                    self.update_results(results);
                 }
-            },
+            }
         }
     }
 

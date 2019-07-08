@@ -71,7 +71,8 @@ impl DocIndexer {
 
         let schema = schema_builder.build();
 
-        let indexer = Self::create_indexer(&schema, config)?;
+        let mut indexer = Self::create_indexer(&schema, config)?;
+        indexer.set_default_multithread_executor();
 
         Ok(DocIndexer {
             schema: DocSchema {

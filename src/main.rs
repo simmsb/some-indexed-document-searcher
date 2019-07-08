@@ -115,20 +115,25 @@ fn main_inner() -> Result<(), SIDSError> {
 
     let searcher = searcher::Searcher::new(schema, indexer).unwrap();
 
+    let running = deploy_cc_handler();
+
     let indexer_data = IndexerData {
         file_collector: file_collector::collect_files(&config).context(CollectorError)?,
         doc_indexer,
         modified_cache,
         indexed_files: Arc::new(AtomicUsize::new(0)),
         failed_files: Arc::new(AtomicUsize::new(0)),
-        running: deploy_cc_handler(),
+        running: running.clone(),
     };
 
     let indexer_thread = deploy_indexer(indexer_data);
 
-    let _ = indexer_thread.join();
-
     gui::spawn(searcher);
+
+    // set running to false when the gui quits
+    running.store(false, Ordering::Relaxed);
+
+    let _ = indexer_thread.join();
 
     Ok(())
 }
