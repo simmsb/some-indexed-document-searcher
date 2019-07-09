@@ -25,43 +25,9 @@ enum SIDSError {
     LastModifiedCacheError { source: last_modified_cache::Error },
 }
 
-fn process_file(
-    last_modified_cache: &last_modified_cache::LastModifiedCache,
-    indexer: &mut indexer::DocIndexer,
-    file: file_collector::FileEntry,
-) -> Option<()> {
-    use indexer::IndexAction;
-    use last_modified_cache::FileCacheAction;
-
-    let f = std::fs::File::open(&file.full_path).ok()?;
-    let modified: u64 = f
-        .metadata()
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-
-    let action = last_modified_cache
-        .check_file(&file.full_path, modified)
-        .ok()?;
-
-    let index_action = match action {
-        FileCacheAction::Outdated => IndexAction::ReIndex,
-        FileCacheAction::UptoDate => return Some(()),
-        FileCacheAction::NotIndexed => IndexAction::Index,
-    };
-
-    indexer.add_job(indexer::IndexRequest(file, index_action));
-
-    Some(())
-}
-
 struct IndexerData {
     file_collector: file_collector::FilesCollectorIteror,
     doc_indexer: indexer::DocIndexer,
-    modified_cache: last_modified_cache::LastModifiedCache,
     indexed_files: Arc<AtomicUsize>,
     failed_files: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
@@ -71,11 +37,8 @@ fn deploy_indexer(mut data: IndexerData) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         for file in data.file_collector {
             if let Ok(file) = file {
-                if let Some(_) = process_file(&data.modified_cache, &mut data.doc_indexer, file) {
-                    data.indexed_files.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    data.failed_files.fetch_add(1, Ordering::Relaxed);
-                }
+                data.doc_indexer.add_job(indexer::IndexRequest(file));
+                data.indexed_files.fetch_add(1, Ordering::Relaxed);
             }
 
             if !data.running.load(Ordering::Relaxed) {
@@ -118,9 +81,8 @@ fn main_inner() -> Result<(), SIDSError> {
     let running = deploy_cc_handler();
 
     let indexer_data = IndexerData {
-        file_collector: file_collector::collect_files(&config).context(CollectorError)?,
+        file_collector: file_collector::collect_files(&config, modified_cache).context(CollectorError)?,
         doc_indexer,
-        modified_cache,
         indexed_files: Arc::new(AtomicUsize::new(0)),
         failed_files: Arc::new(AtomicUsize::new(0)),
         running: running.clone(),

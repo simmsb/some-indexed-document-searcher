@@ -125,16 +125,14 @@ impl DocIndexer {
     }
 }
 
-#[derive(Debug)]
-pub enum IndexAction {
-    /// File exists in the db already
-    ReIndex,
-    /// File does not exist yet
-    Index,
+enum IndexCommand {
+    ReIndex(Term, Document),
+    Index(Document),
+    Delete(Term),
 }
 
 #[derive(Debug)]
-pub struct IndexRequest(pub FileEntry, pub IndexAction);
+pub struct IndexRequest(pub FileEntry);
 
 //  the system looks a bit like this
 //
@@ -148,42 +146,55 @@ pub struct IndexRequest(pub FileEntry, pub IndexAction);
 
 struct IndexerWorker {
     i_recv: Receiver<IndexRequest>,
-    d_send: Sender<(Option<Term>, Document)>,
+    d_send: Sender<IndexCommand>,
     schema: DocSchema,
 }
-
 impl IndexerWorker {
     fn go(self) {
-        for IndexRequest(doc, action) in &self.i_recv {
-            if let Some(content) = match doc.file_ext() {
-                "txt" | "org" | "md" | "rst" => self.index_text_doc(&doc),
+        for IndexRequest(file) in &self.i_recv {
+            use super::file_collector::CollectorOp;
+
+            if let CollectorOp::Delete = file.operation {
+                let _ = self.d_send.send(IndexCommand::Delete(Term::from_field_text(
+                    self.schema.full_path,
+                    file.full_path.to_str().unwrap(),
+                )));
+                continue;
+            }
+
+            if let Some(content) = match file.full_path.extension().unwrap().to_str().unwrap() {
+                "txt" | "org" | "md" | "rst" => self.index_text_doc(&file.full_path),
                 _ext => {
                     // eprintln!("Unknown ext: {}", ext);
                     continue;
                 }
             } {
-                let revoke_doc = match action {
-                    IndexAction::ReIndex => Some(Term::from_field_text(
-                        self.schema.full_path,
-                        doc.full_path(),
-                    )),
-                    IndexAction::Index => None,
-                };
-
                 let doc = doc!(
-                    self.schema.full_path => doc.full_path(),
-                    self.schema.filename => doc.file_name(),
+                    self.schema.full_path => file.full_path.to_str().unwrap(),
+                    self.schema.filename => file.full_path.file_name().unwrap().to_str().unwrap(),
                     self.schema.content => content,
                 );
 
-                let _ = self.d_send.send((revoke_doc, doc));
+                let command = match file.operation {
+                    CollectorOp::ReIndex => IndexCommand::ReIndex(
+                        Term::from_field_text(
+                            self.schema.full_path,
+                            file.full_path.to_str().unwrap(),
+                        ),
+                        doc,
+                    ),
+                    CollectorOp::Index => IndexCommand::Index(doc),
+                    _ => unreachable!(),
+                };
+
+                let _ = self.d_send.send(command);
             }
         }
     }
 
-    fn index_text_doc(&self, doc: &FileEntry) -> Option<String> {
+    fn index_text_doc(&self, file: &std::path::PathBuf) -> Option<String> {
         // TODO: eventually keep track of errors
-        let f = fs::File::open(&doc.full_path).ok()?;
+        let f = fs::File::open(&file).ok()?;
 
         // TODO: don't read the file if it's over some size
 
@@ -194,7 +205,6 @@ impl IndexerWorker {
         Some(content)
     }
 }
-
 pub struct IndexerThreads {
     doc_processor_threads: Vec<std::thread::JoinHandle<()>>,
     doc_consumer_thread: std::thread::JoinHandle<()>,
@@ -240,15 +250,21 @@ impl IndexerThreads {
         })
     }
 
-    fn do_doc_writes(mut writer: tantivy::IndexWriter, d_recv: Receiver<(Option<Term>, Document)>) {
-        for ((revoke_doc, doc), should_commit) in
-            d_recv.iter().zip(once_every::OnceEvery::new(1000))
-        {
+    fn do_doc_writes(mut writer: tantivy::IndexWriter, d_recv: Receiver<IndexCommand>) {
+        for (command, should_commit) in d_recv.iter().zip(once_every::OnceEvery::new(1000)) {
+            let (revoke_doc, doc) = match command {
+                IndexCommand::ReIndex(revoke_doc, doc) => (Some(revoke_doc), Some(doc)),
+                IndexCommand::Index(doc)               => (None,             Some(doc)),
+                IndexCommand::Delete(revoke_doc)       => (Some(revoke_doc), None),
+            };
+
             if let Some(revoke_doc) = revoke_doc {
                 writer.delete_term(revoke_doc);
             }
 
-            writer.add_document(doc);
+            if let Some(doc) = doc {
+                writer.add_document(doc);
+            }
 
             if should_commit {
                 let _ = writer.commit();
