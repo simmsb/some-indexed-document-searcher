@@ -1,18 +1,24 @@
 use gtk::prelude::*;
-use relm::{connect, connect_stream, ContainerWidget, Widget};
+use relm::{connect, connect_stream, interval, ContainerWidget, Relm, Widget};
 use relm_attributes::widget;
 use relm_derive::Msg;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use crate::searcher::{SearchResult, Searcher};
 
 #[derive(Msg)]
 pub enum Msg {
     Quit,
+    Tick,
     Search(String),
 }
 
 pub struct Model {
     searcher: Searcher,
+    indexed_files: Arc<AtomicUsize>,
     results: Vec<relm::Component<super::SearchResult>>,
 }
 
@@ -40,16 +46,27 @@ impl Main {
 
 #[widget]
 impl Widget for Main {
-    fn model(searcher: Searcher) -> Model {
+    fn model((searcher, indexed_files): (Searcher, Arc<AtomicUsize>)) -> Model {
         Model {
             searcher,
+            indexed_files,
             results: Vec::new(),
         }
+    }
+
+    fn subscriptions(&mut self, relm: &Relm<Self>) {
+        interval(relm.stream(), 1000, || Msg::Tick);
     }
 
     fn update(&mut self, event: Msg) {
         match event {
             Msg::Quit => gtk::main_quit(),
+            Msg::Tick => {
+                self.stats_label.set_text(&format!(
+                    "{} indexed files",
+                    self.model.indexed_files.load(Ordering::Relaxed)
+                ));
+            }
             Msg::Search(s) => {
                 if let Some(results) = self.model.searcher.search(&s) {
                     self.update_results(results);
@@ -74,6 +91,8 @@ impl Widget for Main {
                         expand: true,
                     },
                 },
+                #[name="stats_label"]
+                gtk::Label {},
             },
             delete_event(_, _) => (Msg::Quit, Inhibit(false)),
         },

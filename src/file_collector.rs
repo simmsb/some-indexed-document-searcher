@@ -2,8 +2,8 @@ use crossbeam_channel::{unbounded, Receiver};
 use glob;
 use notify::{watcher, RecursiveMode, Watcher};
 use snafu::{ResultExt, Snafu};
-use std::{collections::HashSet, path::PathBuf, time::Duration};
-use walkdir::{DirEntry, WalkDir};
+use std::{collections::HashSet, path::{Path, PathBuf}, time::Duration};
+use walkdir::WalkDir;
 
 use super::config;
 use super::last_modified_cache;
@@ -25,7 +25,7 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum CollectorOp {
     Index,
     ReIndex,
@@ -34,15 +34,13 @@ pub enum CollectorOp {
 
 #[derive(Debug)]
 pub struct FileEntry {
-    pub full_path: PathBuf,
-    pub operation: CollectorOp,
+    full_path: PathBuf,
+    operation: CollectorOp,
 }
 
 impl FileEntry {
-    pub fn full_path(&self) -> &str {
-        self.full_path
-            .to_str()
-            .expect("Couldn't convert OsStr to str")
+    pub fn full_path(&self) -> &Path {
+        &self.full_path
     }
 
     pub fn file_name(&self) -> &str {
@@ -60,6 +58,10 @@ impl FileEntry {
             .to_str()
             .expect("Couldn't convert OsStr to str")
     }
+
+    pub fn operation(&self) -> CollectorOp {
+        self.operation
+    }
 }
 
 enum FileCollectorIteratorMode {
@@ -68,6 +70,7 @@ enum FileCollectorIteratorMode {
 }
 
 enum CIterMAction {
+    /// (list of paths, were paths deleted)
     Result(Option<(Vec<PathBuf>, bool)>),
     Stop,
     IntoNotify,
@@ -83,7 +86,8 @@ impl FileCollectorIteratorMode {
         let mut watcher = watcher(tx, Duration::from_secs(5)).unwrap();
 
         for root in roots {
-            watcher.watch(root, RecursiveMode::Recursive).unwrap();
+            println!("[notify] watching: {:?}", root);
+            let _ = watcher.watch(root, RecursiveMode::Recursive);
         }
 
         *self = FileCollectorIteratorMode::Notify(rx);
@@ -112,12 +116,12 @@ impl FileCollectorIteratorMode {
                 let dent = match it.as_mut().unwrap().next() {
                     Some(result) => match result {
                         Ok(v) => v,
-                        Err(e) => continue,
+                        Err(_e) => continue,
                     },
                     None => return CIterMAction::IntoNotify,
                 };
 
-                return CIterMAction::Result(Some((vec![dent.path().to_path_buf()], true)));
+                return CIterMAction::Result(Some((vec![dent.path().to_path_buf()], false)));
             },
             FileCollectorIteratorMode::Notify(ch) => loop {
                 let e = match ch.recv().ok() {
@@ -127,8 +131,8 @@ impl FileCollectorIteratorMode {
 
                 if let Ok(e) = e {
                     let flag = match e.kind {
-                        EventKind::Create(_) | EventKind::Modify(_) => true,
-                        EventKind::Remove(_) => false,
+                        EventKind::Create(_) | EventKind::Modify(_) => false,
+                        EventKind::Remove(_) => true,
                         _ => continue,
                     };
                     return CIterMAction::Result(Some((e.paths, flag)));
@@ -176,11 +180,6 @@ impl FilesCollectorIteror {
             extra_paths: Vec::new(),
         }
     }
-    fn fetch_next_root_iter(&mut self) -> Option<walkdir::IntoIter> {
-        self.roots
-            .pop()
-            .map(|r| WalkDir::new(r).follow_links(true).into_iter())
-    }
 
     fn predicate(&self, entry: &std::path::Path) -> bool {
         entry
@@ -216,6 +215,14 @@ impl Iterator for FilesCollectorIteror {
                     (path_to_use, was_removed)
                 }
             };
+
+            if was_removed && self.last_modified_cache.remove_file(&path) {
+                println!("saw deleted file: {:?}", path);
+                return Some(Ok(FileEntry {
+                    full_path: path,
+                    operation: CollectorOp::Delete,
+                }));
+            }
 
             if !self.predicate(&path) {
                 if path.is_dir() {

@@ -7,6 +7,7 @@ use snafu::{ResultExt, Snafu};
 use std::{
     fs,
     io::{BufReader, Read},
+    path::Path,
 };
 use tantivy::{self, doc, schema::*};
 
@@ -42,17 +43,17 @@ impl DocSchema {
         self.full_path
     }
 
-    pub fn filename(&self) -> Field {
-        self.filename
-    }
+    // pub fn filename(&self) -> Field {
+    //     self.filename
+    // }
 
     pub fn content(&self) -> Field {
         self.content
     }
 
-    pub fn schema(&self) -> &Schema {
-        &self.schema
-    }
+    // pub fn schema(&self) -> &Schema {
+    //     &self.schema
+    // }
 }
 
 pub struct DocIndexer {
@@ -154,32 +155,32 @@ impl IndexerWorker {
         for IndexRequest(file) in &self.i_recv {
             use super::file_collector::CollectorOp;
 
-            if let CollectorOp::Delete = file.operation {
+            if let CollectorOp::Delete = file.operation() {
                 let _ = self.d_send.send(IndexCommand::Delete(Term::from_field_text(
                     self.schema.full_path,
-                    file.full_path.to_str().unwrap(),
+                    file.full_path().to_str().unwrap(),
                 )));
                 continue;
             }
 
-            if let Some(content) = match file.full_path.extension().unwrap().to_str().unwrap() {
-                "txt" | "org" | "md" | "rst" => self.index_text_doc(&file.full_path),
+            if let Some(content) = match file.file_ext() {
+                "txt" | "org" | "md" | "rst" => self.index_text_doc(file.full_path()),
                 _ext => {
                     // eprintln!("Unknown ext: {}", ext);
                     continue;
                 }
             } {
                 let doc = doc!(
-                    self.schema.full_path => file.full_path.to_str().unwrap(),
-                    self.schema.filename => file.full_path.file_name().unwrap().to_str().unwrap(),
+                    self.schema.full_path => file.full_path().to_str().unwrap(),
+                    self.schema.filename => file.file_name(),
                     self.schema.content => content,
                 );
 
-                let command = match file.operation {
+                let command = match file.operation() {
                     CollectorOp::ReIndex => IndexCommand::ReIndex(
                         Term::from_field_text(
                             self.schema.full_path,
-                            file.full_path.to_str().unwrap(),
+                            file.full_path().to_str().unwrap(),
                         ),
                         doc,
                     ),
@@ -192,7 +193,7 @@ impl IndexerWorker {
         }
     }
 
-    fn index_text_doc(&self, file: &std::path::PathBuf) -> Option<String> {
+    fn index_text_doc<P: AsRef<Path>>(&self, file: P) -> Option<String> {
         // TODO: eventually keep track of errors
         let f = fs::File::open(&file).ok()?;
 
@@ -254,8 +255,8 @@ impl IndexerThreads {
         for (command, should_commit) in d_recv.iter().zip(once_every::OnceEvery::new(1000)) {
             let (revoke_doc, doc) = match command {
                 IndexCommand::ReIndex(revoke_doc, doc) => (Some(revoke_doc), Some(doc)),
-                IndexCommand::Index(doc)               => (None,             Some(doc)),
-                IndexCommand::Delete(revoke_doc)       => (Some(revoke_doc), None),
+                IndexCommand::Index(doc) => (None, Some(doc)),
+                IndexCommand::Delete(revoke_doc) => (Some(revoke_doc), None),
             };
 
             if let Some(revoke_doc) = revoke_doc {

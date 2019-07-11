@@ -29,7 +29,6 @@ struct IndexerData {
     file_collector: file_collector::FilesCollectorIteror,
     doc_indexer: indexer::DocIndexer,
     indexed_files: Arc<AtomicUsize>,
-    failed_files: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
 }
 
@@ -80,17 +79,18 @@ fn main_inner() -> Result<(), SIDSError> {
 
     let running = deploy_cc_handler();
 
+    let indexed_files = Arc::new(AtomicUsize::new(modified_cache.len()));
+
     let indexer_data = IndexerData {
         file_collector: file_collector::collect_files(&config, modified_cache).context(CollectorError)?,
         doc_indexer,
-        indexed_files: Arc::new(AtomicUsize::new(0)),
-        failed_files: Arc::new(AtomicUsize::new(0)),
+        indexed_files: indexed_files.clone(),
         running: running.clone(),
     };
 
     let indexer_thread = deploy_indexer(indexer_data);
 
-    gui::spawn(searcher);
+    gui::spawn(searcher, indexed_files);
 
     // set running to false when the gui quits
     running.store(false, Ordering::Relaxed);

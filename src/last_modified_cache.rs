@@ -51,6 +51,19 @@ impl LastModifiedCache {
         Ok(LastModifiedCache { db })
     }
 
+    pub fn len(&self) -> usize {
+        self.db.len()
+    }
+
+    /// remove a file from the indexed cache if it exists,
+    /// returns true if the file was indexed, false otherwise
+    pub fn remove_file<P: AsRef<std::path::Path>>(
+        &self,
+        path: P
+    ) -> bool {
+        self.db.del(path.as_ref().to_str().unwrap()).unwrap().is_some()
+    }
+
     pub fn check_file<P: AsRef<std::path::Path>>(
         &self,
         path: P,
